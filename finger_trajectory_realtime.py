@@ -61,19 +61,6 @@ class FingerDataParser:
                 pkt = lines[i:i + PACKET_SIZE]
                 if len(pkt) == PACKET_SIZE:
                     fingers = self.parse_packet(pkt, packet_index)
-                    # 只打印前10包数据详情
-                    if packet_index < 10:
-                        print(f"\n=== Packet {packet_index} (offset {i}) ===")
-                        for slot_idx, slot_pos in enumerate(FINGER_SLOTS):
-                            if slot_pos + 5 < len(pkt):
-                                byte_val = pkt[slot_pos]
-                                finger_id = (byte_val >> 4) & 0x0F
-                                status = byte_val & 0x0F
-                                x = pkt[slot_pos + 2] | (pkt[slot_pos + 3] << 8)
-                                y = pkt[slot_pos + 4] | (pkt[slot_pos + 5] << 8)
-                                x = pkt[slot_pos + 1] | (pkt[slot_pos + 2] << 8)
-                        y = pkt[slot_pos + 3] | (pkt[slot_pos + 4] << 8)
-                        print(f"  Slot{slot_idx}[{slot_pos}]: ID={finger_id}, Status={status}, X={x}, Y={y}")
                     for finger in fingers:
                         trajectories[finger.finger_id].append(finger)
                     packet_index += 1
@@ -83,7 +70,11 @@ class FingerDataParser:
 
         print(f"\n=== 解析完成: {packet_index} 个手指包 ===")
         for fid in sorted(trajectories.keys()):
-            print(f"  Finger {fid}: {len(trajectories[fid])} 点")
+            pts = trajectories[fid]
+            statuses = [p.status for p in pts]
+            coords = [(p.x, p.y) for p in pts]
+            print(f"  Finger {fid}: {len(pts)} 点, statuses={statuses[:20]}{'...' if len(statuses) > 20 else ''}")
+            print(f"    coords={coords[:10]}{'...' if len(coords) > 10 else ''}")
 
         return trajectories, packet_index
 
@@ -247,9 +238,7 @@ class TrajectoryRenderer:
 
     def check_releases(self):
         """检查当前帧的手指可见性
-        状态2=大面积touch, 状态3=手指touch
-        状态0=大面积release, 状态1=手指release
-        松键后清空轨迹，新touch会重新开始显示
+        松键(状态0或1)后清空该id的轨迹，后续新的touch会重新开始显示
         """
         # 每个手指在当前帧的可见起始索引
         self.visible_start_indices = {}
@@ -262,34 +251,39 @@ class TrajectoryRenderer:
                 self.visible_end_indices[finger_id] = 0
                 continue
 
-            # 找到current_frame范围内最后一个touch事件
+            # 找到current_frame之前的最后一个release
+            last_release_idx = -1
+            for i in range(min(self.current_frame, len(points) - 1), -1, -1):
+                if points[i].status in (0, 1):  # 松键
+                    last_release_idx = i
+                    break
+
+            # 找到current_frame之前的最后一个touch
             last_touch_idx = -1
             for i in range(min(self.current_frame, len(points) - 1), -1, -1):
-                if points[i].status in (2, 3):  # 手指或大面积touch
+                if points[i].status in (2, 3):  # touch
                     last_touch_idx = i
                     break
 
-            if last_touch_idx < 0:
-                # 没有touch，不显示
+            # 找到last_release之后是否有新的touch
+            touch_after_release = False
+            if last_release_idx >= 0 and last_touch_idx > last_release_idx:
+                touch_after_release = True
+                # 显示从新touch开始到当前帧
+                self.visible_start_indices[finger_id] = last_touch_idx
+                self.visible_end_indices[finger_id] = min(self.current_frame + 1, len(points))
+            elif last_release_idx < 0 and last_touch_idx >= 0:
+                # 从未release，显示从开始到当前帧
                 self.visible_start_indices[finger_id] = 0
-                self.visible_end_indices[finger_id] = 0
-                continue
-
-            # 找到在last_touch_idx之前的最后一个release
-            last_release_before_touch = -1
-            for i in range(last_touch_idx - 1, -1, -1):
-                if points[i].status in (0, 1):  # 手指或大面积release
-                    last_release_before_touch = i
-                    break
-
-            if last_release_before_touch >= 0:
-                # release在touch之前，显示从touch开始的轨迹
+                self.visible_end_indices[finger_id] = min(self.current_frame + 1, len(points))
+            elif last_touch_idx >= 0:
+                # 有touch但在release之前，显示从touch开始（release不显示touch之后的轨迹）
                 self.visible_start_indices[finger_id] = last_touch_idx
                 self.visible_end_indices[finger_id] = min(self.current_frame + 1, len(points))
             else:
-                # 没有release，显示从0到current_frame
+                # 没有任何touch，不显示
                 self.visible_start_indices[finger_id] = 0
-                self.visible_end_indices[finger_id] = min(self.current_frame + 1, len(points))
+                self.visible_end_indices[finger_id] = 0
 
     def draw(self):
         """绘制画面"""
@@ -346,7 +340,7 @@ class TrajectoryRenderer:
                         p2 = visible_points[i + 1]
                         x1, y1 = self.coord_to_screen(p1.x, p1.y)
                         x2, y2 = self.coord_to_screen(p2.x, p2.y)
-                        pygame.draw.line(self.screen, color, (x1, y1), (x2, y2), 6)
+                        pygame.draw.line(self.screen, color, (x1, y1), (x2, y2), 8)
 
                     # 填充轨迹区域（半透明）
                     if len(visible_points) > 2:
