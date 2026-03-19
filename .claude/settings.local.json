@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(unzip -l 'Session 2.sal')",
+      "Bash(unzip -o \"Session 2.sal\" -d /tmp/sal_capture/)",
+      "Read(//tmp/sal_capture/**)",
+      "Bash(xxd /tmp/sal_capture/digital-0.bin)",
+      "Read(//Users/zhouheng/hid-iic-analyzer/**)",
+      "Bash(python3 /tmp/debug_i2c.py)",
+      "Bash(pip install:*)",
+      "Bash(pip3 install:*)",
+      "Bash(python3 -c \"from saleae import saleae; print\\(''saleae lib available''\\)\")"
+    ]
+  }
+}
