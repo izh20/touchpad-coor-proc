@@ -1,3 +1,4 @@
+# trajectory/models.py
 class FingerTrajectory:
     def __init__(self, finger_id, status, x, y):
         self.finger_id = finger_id
