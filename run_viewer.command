@@ -9,21 +9,31 @@ if [ "$#" -eq 0 ]; then
   exit 1
 fi
 
-PY=python3
-# 如果你需指定虚拟环境或自定义 Python 路径，请修改下面一行
-# PY=/usr/local/bin/python3
-
-if ! command -v "$PY" >/dev/null 2>&1; then
-  echo "未在 PATH 中找到 python3。请安装 Python 或修改脚本设置正确的解释器路径。"
-  read -n1 -r -p "按任意键退出..."
-  exit 1
+PY=""
+# 自动检测 python3，可在此处添加自定义解释器路径
+if command -v python3 >/dev/null 2>&1; then
+  PY=$(command -v python3)
+elif [ -x "/usr/bin/python3" ]; then
+  PY=/usr/bin/python3
+elif [ -x "/opt/homebrew/bin/python3" ]; then
+  PY=/opt/homebrew/bin/python3
+elif [ -x "/usr/local/bin/python3" ]; then
+  PY=/usr/local/bin/python3
+else
+  PY="/usr/bin/env python3"
 fi
 
 DATAFILE="$1"
 
+LOG="$(pwd)/run_viewer.log"
+echo "=== run_viewer $(date) ===" >> "$LOG"
+echo "DATAFILE=$DATAFILE" >> "$LOG"
+echo "PY=$PY" >> "$LOG"
+
 echo "正在使用文件： $DATAFILE"
+echo "使用解释器: $PY"
 
-"$PY" "$(pwd)/finger_trajectory_realtime.py" "$DATAFILE"
+"$PY" "$(pwd)/finger_trajectory_realtime.py" "$DATAFILE" >> "$LOG" 2>&1
 
-echo "程序已退出。"
+echo "程序已退出。输出已写入 $LOG"
 read -n1 -r -p "按任意键退出..."
