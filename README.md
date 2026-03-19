@@ -109,3 +109,23 @@ A: 根据状态判断。状态3=手指touch，状态2=大面积touch。
 
 **Q: 播放速度太快/太慢？**
 A: 使用 `+` 或 `-` 键调整速度，范围 10-500 Hz。
+
+## 开发者说明（模块化）
+
+项目已将解析器、模型与渲染器模块化到 `trajectory` 包中，位置：`trajectory/`。
+
+- 解析器: `trajectory/parser.py`（类 `FingerDataParser`），可通过 `from trajectory import FingerDataParser` 导入。
+- 模型: `trajectory/models.py`（包含 `FingerTrajectory`、`LargeTouchArea`）。
+- 渲染器: `trajectory/renderer.py`（提供 `render_trajectories`、`render_legend` 辅助函数）。
+
+示例：
+
+```python
+from trajectory import FingerDataParser, renderer
+
+parser = FingerDataParser()
+trajectories, packets = parser.process_csv_data('2.txt')
+# 在 Pygame 环境中调用 renderer.render_trajectories(screen, trajectories, coord_to_screen)
+```
+
+原 `hid-iic-analyzer/hid-iic-analyzer/src` 下的旧实现已移至 `hid-iic-analyzer/hid-iic-analyzer/src_legacy/`，避免混淆。
