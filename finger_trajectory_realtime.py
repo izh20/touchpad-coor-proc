@@ -7,6 +7,7 @@
 import pygame
 import sys
 from collections import defaultdict
+from trajectory.parser import FingerDataParser, FingerPoint
 import argparse
 
 # 坐标包配置
@@ -21,92 +22,7 @@ SCREEN_HEIGHT = 900
 FPS = 130  # 130Hz渲染
 
 
-class FingerPoint:
-    """手指坐标点"""
-    def __init__(self, x, y, finger_id, status, packet_index):
-        self.x = x
-        self.y = y
-        self.finger_id = finger_id
-        self.status = status
-        self.packet_index = packet_index
-
-
-class FingerDataParser:
-    """手指数据解析器"""
-
-    def parse_hex_value(self, hex_str):
-        if isinstance(hex_str, str):
-            if hex_str.startswith('0x') or hex_str.startswith('0X'):
-                return int(hex_str, 16)
-            return int(hex_str)
-        return int(hex_str)
-
-    def process_csv_data(self, csv_path):
-        """处理CSV文件，提取手指轨迹"""
-        lines = []
-        with open(csv_path, 'r') as f:
-            header = f.readline()
-            for line in f:
-                parts = line.strip().split(',')
-                if len(parts) >= 5:
-                    data_val = self.parse_hex_value(parts[3])
-                    lines.append(data_val)
-
-        trajectories = defaultdict(list)
-        packet_index = 0
-        i = 0
-
-        while i < len(lines):
-            if lines[i] == FINGER_REPORT_ID:
-                pkt = lines[i:i + PACKET_SIZE]
-                if len(pkt) == PACKET_SIZE:
-                    fingers = self.parse_packet(pkt, packet_index)
-                    for finger in fingers:
-                        trajectories[finger.finger_id].append(finger)
-                    packet_index += 1
-                i += PACKET_SIZE
-            else:
-                i += 1
-
-        print(f"\n=== 解析完成: {packet_index} 个手指包 ===")
-        for fid in sorted(trajectories.keys()):
-            pts = trajectories[fid]
-            statuses = [p.status for p in pts]
-            coords = [(p.x, p.y) for p in pts]
-            print(f"  Finger {fid}: {len(pts)} 点, statuses={statuses[:20]}{'...' if len(statuses) > 20 else ''}")
-            print(f"    coords={coords[:10]}{'...' if len(coords) > 10 else ''}")
-
-        return trajectories, packet_index
-
-    def parse_packet(self, data_bytes, packet_index):
-        """解析单个坐标包 (47字节)
-        状态定义:
-        - 0: 大面积松键
-        - 1: 手指松键
-        - 2: 大面积touch
-        - 3: 手指touch
-        """
-        fingers = []
-        if len(data_bytes) < PACKET_SIZE:
-            return fingers
-
-        for slot_pos in FINGER_SLOTS:
-            if slot_pos + 4 >= len(data_bytes):
-                break
-
-            byte_val = data_bytes[slot_pos]
-            finger_id = (byte_val >> 4) & 0x0F
-            finger_status = byte_val & 0x0F
-
-            # 按README: slot+1,slot+2=X, slot+3,slot+4=Y
-            x = data_bytes[slot_pos + 1] | (data_bytes[slot_pos + 2] << 8)
-            y = data_bytes[slot_pos + 3] | (data_bytes[slot_pos + 4] << 8)
-
-            # 只有有坐标数据时才记录
-            if x != 0 or y != 0:
-                fingers.append(FingerPoint(x, y, finger_id, finger_status, packet_index))
-
-        return fingers
+# Parser moved to trajectory.parser; import FingerDataParser, FingerPoint above
 
 
 class TrajectoryRenderer:
@@ -156,6 +72,9 @@ class TrajectoryRenderer:
         self.visible_start_indices = {}
         self.visible_end_indices = {}
 
+        # 播放控制：播放/暂停
+        self.playing = True
+
         # 坐标范围 (用于缩放)
         all_points = []
         for pts in trajectories.values():
@@ -184,6 +103,7 @@ class TrajectoryRenderer:
 
         # 控制说明
         self.show_controls = True
+        
 
     def coord_to_screen(self, x, y):
         """将数据坐标转换为屏幕坐标"""
@@ -200,8 +120,17 @@ class TrajectoryRenderer:
                 if event.key == pygame.K_ESCAPE:
                     return False
                 elif event.key == pygame.K_SPACE:
-                    # 空格键暂停/继续
-                    pass
+                    # 空格键切换播放/暂停
+                    self.playing = not self.playing
+                    # 更新标题以反映暂停状态
+                    state = 'Paused' if not self.playing else f'{self.fps}Hz'
+                    pygame.display.set_caption(f'Finger Trajectory Viewer - {state}')
+                elif event.key == pygame.K_RIGHT:
+                    # 逐帧前进（按键触发）
+                    if self.current_frame < self.max_frames - 1:
+                        self.current_frame += 1
+                    else:
+                        self.current_frame = 0
                 elif event.key == pygame.K_r:
                     # R键重置
                     self.current_frame = 0
@@ -221,28 +150,19 @@ class TrajectoryRenderer:
 
     def update(self):
         """更新状态"""
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_RIGHT] or keys[pygame.K_SPACE]:
-            self.current_frame = min(self.current_frame + 1, self.max_frames - 1)
-        elif keys[pygame.K_LEFT]:
-            self.current_frame = max(self.current_frame - 1, 0)
-
-        # 自动播放
-        if not keys[pygame.K_SPACE]:
-            self.current_frame += 1
-            if self.current_frame >= self.max_frames:
+        # 自动播放（仅在播放状态时推进帧）
+        if self.playing:
+            if self.current_frame < self.max_frames - 1:
+                self.current_frame += 1
+            else:
                 self.current_frame = 0
 
-        # 检查当前帧是否有手指释放
+        # 检查当前帧的手指释放
         self.check_releases()
 
     def check_releases(self):
-        """检查当前帧的手指可见性
-        松键(状态0或1)后清空该id的轨迹，后续新的touch会重新开始显示
-        """
-        # 每个手指在当前帧的可见起始索引
+        """检查当前帧的手指可见性"""
         self.visible_start_indices = {}
-        # 每个手指在当前帧的可见结束索引
         self.visible_end_indices = {}
 
         for finger_id, points in self.trajectories.items():
@@ -251,47 +171,45 @@ class TrajectoryRenderer:
                 self.visible_end_indices[finger_id] = 0
                 continue
 
-            # 找到current_frame之前的最后一个release
+            # 计算在当前帧范围内的 end_idx（当前帧之前的所有点）
+            end_idx = min(self.current_frame + 1, len(points))
+
+            # 在 [0, end_idx-1] 范围内向后找最后一个 release
             last_release_idx = -1
-            for i in range(min(self.current_frame, len(points) - 1), -1, -1):
-                if points[i].status in (0, 1):  # 松键
+            for i in range(end_idx - 1, -1, -1):
+                if points[i].status in (0, 1):
                     last_release_idx = i
                     break
 
-            # 找到current_frame之前的最后一个touch
-            last_touch_idx = -1
-            for i in range(min(self.current_frame, len(points) - 1), -1, -1):
-                if points[i].status in (2, 3):  # touch
-                    last_touch_idx = i
-                    break
+            # 起始索引为最后一次 release 之后的第一个 touch
+            start_idx = 0
+            if last_release_idx >= 0:
+                found = False
+                for i in range(last_release_idx + 1, end_idx):
+                    if points[i].status in (2, 3):
+                        start_idx = i
+                        found = True
+                        break
+                if not found:
+                    # release 之后到当前帧没有新的 touch，则无可见点
+                    start_idx = end_idx
 
-            # 找到last_release之后是否有新的touch
-            touch_after_release = False
-            if last_release_idx >= 0 and last_touch_idx > last_release_idx:
-                touch_after_release = True
-                # 显示从新touch开始到当前帧
-                self.visible_start_indices[finger_id] = last_touch_idx
-                self.visible_end_indices[finger_id] = min(self.current_frame + 1, len(points))
-            elif last_release_idx < 0 and last_touch_idx >= 0:
-                # 从未release，显示从开始到当前帧
-                self.visible_start_indices[finger_id] = 0
-                self.visible_end_indices[finger_id] = min(self.current_frame + 1, len(points))
-            elif last_touch_idx >= 0:
-                # 有touch但在release之前，显示从touch开始（release不显示touch之后的轨迹）
-                self.visible_start_indices[finger_id] = last_touch_idx
-                self.visible_end_indices[finger_id] = min(self.current_frame + 1, len(points))
-            else:
-                # 没有任何touch，不显示
+            # 设置可见范围
+            if end_idx <= start_idx:
                 self.visible_start_indices[finger_id] = 0
                 self.visible_end_indices[finger_id] = 0
+            else:
+                self.visible_start_indices[finger_id] = start_idx
+                self.visible_end_indices[finger_id] = end_idx
 
     def draw(self):
         """绘制画面"""
         self.screen.fill(self.BG_COLOR)
 
-        # 绘制标题
-        title = self.title_font.render(f'Finger Trajectories - Frame {self.current_frame}/{self.max_frames-1}', True, self.WHITE)
-        self.screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 10))
+        # 左上角：当前帧 / 总帧数
+        total_frames = max(1, self.max_frames)
+        frame_text = self.font.render(f'Frame {self.current_frame}/{total_frames}', True, self.WHITE)
+        self.screen.blit(frame_text, (10, 10))
 
         # 绘制坐标轴
         pygame.draw.line(self.screen, self.GRAY, (50, SCREEN_HEIGHT - 50), (SCREEN_WIDTH - 50, SCREEN_HEIGHT - 50), 2)  # X轴
@@ -334,33 +252,32 @@ class TrajectoryRenderer:
             if is_large_area:
                 # 大面积：粗线 + 填充轨迹区域
                 if len(visible_points) > 1:
-                    # 绘制粗轨迹线
+                    # 绘制粗轨迹线（6px）
                     for i in range(len(visible_points) - 1):
                         p1 = visible_points[i]
                         p2 = visible_points[i + 1]
                         x1, y1 = self.coord_to_screen(p1.x, p1.y)
                         x2, y2 = self.coord_to_screen(p2.x, p2.y)
-                        pygame.draw.line(self.screen, color, (x1, y1), (x2, y2), 8)
+                        pygame.draw.line(self.screen, color, (x1, y1), (x2, y2), 6)
 
                     # 填充轨迹区域（半透明）
                     if len(visible_points) > 2:
                         trail_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
                         trail_points = [self.coord_to_screen(p.x, p.y) for p in visible_points]
-                        pygame.draw.lines(trail_surface, (*color, 80), False, trail_points, 8)
+                        pygame.draw.lines(trail_surface, (*color, 80), False, trail_points, 6)
                         self.screen.blit(trail_surface, (0, 0))
 
                 # 大面积当前点：大实心圆
                 current = visible_points[-1]
                 x, y = self.coord_to_screen(current.x, current.y)
                 pygame.draw.circle(self.screen, color, (x, y), 15)
-                pygame.draw.circle(self.screen, self.WHITE, (x, y), 10)
 
                 # 大面积标签
                 label = self.font.render(f'AREA{finger_id}', True, color)
                 self.screen.blit(label, (x + 18, y - 18))
 
             else:
-                # 手指：细线 + 小实心点
+                # 手指：细线 + 小空心点
                 if len(visible_points) > 1:
                     for i in range(len(visible_points) - 1):
                         p1 = visible_points[i]
@@ -373,28 +290,31 @@ class TrajectoryRenderer:
                 current = visible_points[-1]
                 x, y = self.coord_to_screen(current.x, current.y)
                 status_color = self.STATUS_COLORS.get(current.status, self.GRAY)
+                # 小空心圆 (8px，线宽2)
                 pygame.draw.circle(self.screen, status_color, (x, y), 8, 2)
-                pygame.draw.circle(self.screen, status_color, (x, y), 4)
 
                 # 手指ID标签
                 label = self.font.render(f'F{finger_id}', True, color)
                 self.screen.blit(label, (x + 10, y - 10))
 
-        # 绘制图例
+            pass
+
+        # 右上角：轨迹图例，避免遮挡主体区域
+        legend_x = SCREEN_WIDTH - 300
         legend_y = 60
         for finger_id in sorted(self.trajectories.keys()):
             color = self.FINGER_COLORS[finger_id % len(self.FINGER_COLORS)]
             count = len(self.trajectories[finger_id])
             statuses = [p.status for p in self.trajectories[finger_id]]
-            # 根据轨迹中是否包含大面积状态来判断
             has_large = 2 in statuses or 0 in statuses
             label = f'AREA{finger_id}' if has_large else f'Finger {finger_id}'
             text = self.font.render(f'{label}: {count} pts', True, color)
-            self.screen.blit(text, (SCREEN_WIDTH - 200, legend_y))
+            self.screen.blit(text, (legend_x, legend_y))
             legend_y += 25
 
-        # 状态图例
-        status_y = legend_y + 20
+        # 右下角：状态说明
+        status_x = SCREEN_WIDTH - 300
+        status_y = SCREEN_HEIGHT - 140
         status_legend = [
             (3, 'Finger Touch', (255, 0, 0)),
             (2, 'Large Touch', (0, 0, 255)),
@@ -402,30 +322,33 @@ class TrajectoryRenderer:
             (0, 'Large Release', (128, 128, 128)),
         ]
         for status, sname, color in status_legend:
-            text = self.font.render(f'{sname}', True, color)
-            pygame.draw.circle(self.screen, color, (SCREEN_WIDTH - 210, status_y + 8), 6)
-            self.screen.blit(text, (SCREEN_WIDTH - 200, status_y))
+            text = self.font.render(sname, True, color)
+            pygame.draw.circle(self.screen, color, (status_x, status_y + 8), 6)
+            self.screen.blit(text, (status_x + 20, status_y))
             status_y += 25
 
-        # 控制说明
+        # 左下角：坐标范围和控制说明
         if self.show_controls:
             controls = [
-                'Controls:',
-                'SPACE/RIGHT: Next Frame',
+                f'X: {self.x_min:.0f} - {self.x_max:.0f}',
+                f'Y: {self.y_min:.0f} - {self.y_max:.0f}',
+                '',
+                'SPACE: Play/Pause',
+                'RIGHT: Next Frame',
                 'LEFT: Previous Frame',
                 'R: Reset',
                 '+/-: Speed',
                 'ESC: Quit'
             ]
-            cy = SCREEN_HEIGHT - 150
+            cy = SCREEN_HEIGHT - 170
             for ctrl in controls:
                 text = self.font.render(ctrl, True, self.GRAY)
-                self.screen.blit(text, (SCREEN_WIDTH - 200, cy))
+                self.screen.blit(text, (10, cy))
                 cy += 20
 
-        # FPS
+        # FPS（稍下方，避免与帧计数重合）
         fps_text = self.font.render(f'FPS: {self.fps}', True, self.WHITE)
-        self.screen.blit(fps_text, (10, 10))
+        self.screen.blit(fps_text, (10, 40))
 
         pygame.display.flip()
 
