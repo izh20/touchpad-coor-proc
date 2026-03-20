@@ -449,10 +449,13 @@ describe('decodeI2CWaveforms', () => {
 ```typescript
 import type { I2CWaveformSample, I2CTransaction } from '../../src/types'
 
-const I2C_SAMPLE_RATE = 40000000 // 40 MHz (example)
-
 /**
  * Decode I2C waveform samples into transactions
+ *
+ * I2C signaling:
+ * - START: SDA falling while SCL is high
+ * - STOP: SDA rising while SCL is high
+ * - Data: Sampled on SCL rising edge (MSB first)
  */
 export function decodeI2CWaveforms(samples: I2CWaveformSample[]): I2CTransaction[] {
   const transactions: I2CTransaction[] = []
@@ -462,13 +465,16 @@ export function decodeI2CWaveforms(samples: I2CWaveformSample[]): I2CTransaction
   let currentDirection: 'read' | 'write' = 'write'
   let currentData: number[] = []
   let startTime = 0
+  let bitBuffer = 0
+  let bitCount = 0
+  let currentByte = 0
 
   for (let i = 1; i < samples.length; i++) {
     const prev = samples[i - 1]
     const curr = samples[i]
 
-    // Detect START (SDA falling while SCL is high)
-    if (prev.scl && curr.scl && !prev.sda && curr.sda) {
+    // START: SDA falling edge while SCL is high
+    if (prev.scl && curr.scl && prev.sda && !curr.sda) {
       if (inTransaction && currentData.length > 0) {
         transactions.push({
           timestamp: startTime,
@@ -483,11 +489,14 @@ export function decodeI2CWaveforms(samples: I2CWaveformSample[]): I2CTransaction
       inTransaction = true
       startTime = curr.timestamp
       currentData = []
+      bitCount = 0
+      bitBuffer = 0
+      currentByte = 0
       continue
     }
 
-    // Detect STOP (SDA rising while SCL is high)
-    if (prev.scl && curr.scl && prev.sda && !curr.sda) {
+    // STOP: SDA rising edge while SCL is high
+    if (prev.scl && curr.scl && !prev.sda && curr.sda) {
       if (inTransaction && currentData.length > 0) {
         transactions.push({
           timestamp: startTime,
@@ -501,28 +510,32 @@ export function decodeI2CWaveforms(samples: I2CWaveformSample[]): I2CTransaction
       }
       inTransaction = false
       currentData = []
+      bitCount = 0
       continue
     }
 
-    // Sample data on SCL rising edge
+    // Sample data bit on SCL rising edge
     if (!prev.scl && curr.scl && inTransaction) {
-      const bit = curr.sda ? 1 : 0
+      bitBuffer = (bitBuffer << 1) | (curr.sda ? 1 : 0)
+      bitCount++
 
-      // Address is first 7 bits after START
-      if (currentData.length === 0) {
-        currentAddress = (currentAddress << 1) | bit
-      } else if (currentData.length === 1) {
-        // R/W bit
-        currentDirection = bit === 0 ? 'write' : 'read'
+      // Address phase: first 7 bits + R/W bit (8 bits total)
+      if (bitCount <= 8) {
+        currentByte = bitBuffer
+        if (bitCount === 8) {
+          currentAddress = currentByte >> 1
+          currentDirection = (currentByte & 1) === 0 ? 'write' : 'read'
+        }
       } else {
-        // Data byte
-        const byteIndex = currentData.length - 2 // -2 for address + R/W
-        if (byteIndex >= 0) {
-          currentData[byteIndex] = (currentData[byteIndex] << 1) | bit
+        // Data phase: 8 bits per byte
+        if (bitCount % 8 === 0) {
+          currentData.push(currentByte)
+          currentByte = 0
+          bitBuffer = 0
+        } else {
+          currentByte = (currentByte << 1) | (curr.sda ? 1 : 0)
         }
       }
-
-      currentData.push(bit === 0 ? 0 : 1) // Simplified
     }
   }
 
@@ -553,7 +566,7 @@ git commit -m "feat: add I2C protocol decoder"
 - Modify: `electron/main.ts` (add IPC handler)
 - Modify: `electron/preload.ts` (expose parse-sal-file)
 
-**Note:** This task assumes .sal file format contains raw digital samples. The actual .sal format parsing may vary based on Logic2 version.
+**Note:** This task assumes .sal file format contains raw digital samples. The actual .sal format parsing may vary based on Logic2 version. The finger packet scanning approach below scans I2C data payloads for [0x2F, 0x00, 0x04] headers.
 
 - [ ] **Step 1: Create electron/parser/sal-parser.ts**
 
@@ -570,6 +583,9 @@ import { decodeI2CWaveforms } from './i2c-decoder'
  * - Header with metadata
  * - Digital sample data as alternating bytes for different channels
  * - Each byte represents one sample (bit 0 = channel 0, bit 1 = channel 1, etc.)
+ *
+ * Finger packets are embedded in I2C transaction data payloads.
+ * We first decode I2C transactions, then scan their payloads for finger packet headers.
  */
 export function parseSalFile(filePath: string): SalFileData {
   const buffer = fs.readFileSync(filePath)
@@ -577,7 +593,6 @@ export function parseSalFile(filePath: string): SalFileData {
 
   // Extract digital samples (simplified - assumes raw binary format)
   const waveforms: I2CWaveformSample[] = []
-  const fingerFrames: FingerFrame[] = []
 
   // Sample rate from file header or default
   const SAMPLE_RATE = 40000000 // 40 MHz
@@ -597,23 +612,33 @@ export function parseSalFile(filePath: string): SalFileData {
       sda
     })
     sampleIndex++
-
-    // Check for finger packet header (every 64 bytes in this example)
-    if (i % 64 === 0 && i + 47 < data.length) {
-      if (isFingerPacketHeader(data.slice(i, i + 3))) {
-        const slots = parseFingerPacket(data.slice(i, i + 47), waveforms[waveforms.length - 1].timestamp)
-        fingerFrames.push({
-          timestamp: waveforms[waveforms.length - 1].timestamp,
-          frameIndex: fingerFrames.length,
-          slots
-        })
-        i += 46 // Skip past this packet
-      }
-    }
   }
 
   // Decode I2C transactions from waveforms
   const transactions = decodeI2CWaveforms(waveforms)
+
+  // Scan I2C transaction payloads for finger packet headers
+  const fingerFrames: FingerFrame[] = []
+  for (const tx of transactions) {
+    // Scan data payload for finger packet header [0x2F, 0x00, 0x04]
+    for (let i = 0; i < tx.data.length - 3; i++) {
+      if (tx.data[i] === 0x2F && tx.data[i + 1] === 0x00 && tx.data[i + 2] === 0x04) {
+        // Found finger packet header in I2C data payload
+        // Extract 47 bytes starting from header
+        if (i + 47 <= tx.data.length) {
+          const payload = new Uint8Array(tx.data.slice(i, i + 47))
+          const slots = parseFingerPacket(payload, tx.timestamp)
+
+          fingerFrames.push({
+            timestamp: tx.timestamp,
+            frameIndex: fingerFrames.length,
+            slots
+          })
+        }
+        break // Move to next transaction after finding one header
+      }
+    }
+  }
 
   return { waveforms, transactions, fingerFrames }
 }
@@ -730,6 +755,65 @@ export const useDataStore = create<DataState>((set) => ({
 ```bash
 git add src/store/dataStore.ts
 git commit -m "feat: add Zustand data store with tab state"
+```
+
+---
+
+## Task 5b: Playback Hook
+
+**Goal:** Implement playback timing logic for trajectory animation
+
+**Files:**
+- Create: `src/hooks/usePlayback.ts`
+
+- [ ] **Step 1: Create src/hooks/usePlayback.ts**
+
+```typescript
+import { useEffect, useRef } from 'react'
+import { useDataStore } from '../store/dataStore'
+
+/**
+ * Hook to manage trajectory playback timing
+ * Advances frames at the configured playback speed (Hz)
+ */
+export function usePlayback() {
+  const isPlaying = useDataStore((s) => s.isPlaying)
+  const playbackSpeed = useDataStore((s) => s.playbackSpeed)
+  const fingerFrames = useDataStore((s) => s.fingerFrames)
+  const currentFrame = useDataStore((s) => s.currentFrame)
+  const setCurrentFrame = useDataStore((s) => s.setCurrentFrame)
+
+  const intervalRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (isPlaying) {
+      // Calculate interval from playback speed (Hz = frames per second)
+      const intervalMs = 1000 / playbackSpeed
+
+      intervalRef.current = window.setInterval(() => {
+        setCurrentFrame((currentFrame + 1) % fingerFrames.length)
+      }, intervalMs)
+    } else {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+      }
+    }
+  }, [isPlaying, playbackSpeed, currentFrame, fingerFrames.length, setCurrentFrame])
+}
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add src/hooks/usePlayback.ts
+git commit -m "feat: add playback timing hook"
 ```
 
 ---
@@ -1030,6 +1114,7 @@ export function TrajectoryCanvas() {
 
 ```typescript
 import { useDataStore } from '../../store/dataStore'
+import { usePlayback } from '../../hooks/usePlayback'
 import { TrajectoryCanvas } from './TrajectoryCanvas'
 
 export function TrajectoryTab() {
@@ -1040,6 +1125,9 @@ export function TrajectoryTab() {
   const setCurrentFrame = useDataStore((s) => s.setCurrentFrame)
   const setIsPlaying = useDataStore((s) => s.setIsPlaying)
   const setPlaybackSpeed = useDataStore((s) => s.setPlaybackSpeed)
+
+  // Start playback loop
+  usePlayback()
 
   return (
     <div className="trajectory-tab">
