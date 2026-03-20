@@ -1,0 +1,19 @@
+{"type":"server-started","port":61438,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:61438","screen_dir":"/Users/zhouheng/hid-iic-analyzer/.superpowers/brainstorm/33660-1773935371"}
+{"type":"screen-added","file":"/Users/zhouheng/hid-iic-analyzer/.superpowers/brainstorm/33660-1773935371/layout-tabs.html"}
+{"type":"server-stopped","reason":"idle timeout"}
+{"source":"user-event","type":"click","text":"A\n    \n      水平标签栏 + 均分布局\n      顶部水平标签栏，三个标签等宽分布","choice":"horizontal","id":null,"timestamp":1773975805910}
+{"source":"user-event","type":"click","text":"B\n    \n      左侧垂直标签栏\n      左侧垂直标签堆叠，右侧主内容区更宽敞","choice":"sidebar","id":null,"timestamp":1773975806823}
+{"source":"user-event","type":"click","text":"C\n    \n      浮动标签栏\n      标签栏可拖拽定位，窗口自由布局","choice":"floating","id":null,"timestamp":1773975807656}
+{"source":"user-event","type":"click","text":"A\n    \n      水平标签栏 + 均分布局\n      顶部水平标签栏，三个标签等宽分布","choice":"horizontal","id":null,"timestamp":1773975808589}
+{"source":"user-event","type":"click","text":"B\n    \n      左侧垂直标签栏\n      左侧垂直标签堆叠，右侧主内容区更宽敞","choice":"sidebar","id":null,"timestamp":1773975809756}
+{"source":"user-event","type":"click","text":"C\n    \n      浮动标签栏\n      标签栏可拖拽定位，窗口自由布局","choice":"floating","id":null,"timestamp":1773975810539}
+{"source":"user-event","type":"click","text":"B\n    \n      左侧垂直标签栏\n      左侧垂直标签堆叠，右侧主内容区更宽敞","choice":"sidebar","id":null,"timestamp":1773975811472}
+{"source":"user-event","type":"click","text":"A\n    \n      水平标签栏 + 均分布局\n      顶部水平标签栏，三个标签等宽分布","choice":"horizontal","id":null,"timestamp":1773975812256}
+{"source":"user-event","type":"click","text":"B\n    \n      左侧垂直标签栏\n      左侧垂直标签堆叠，右侧主内容区更宽敞","choice":"sidebar","id":null,"timestamp":1773975814473}
+{"source":"user-event","type":"click","text":"C\n    \n      浮动标签栏\n      标签栏可拖拽定位，窗口自由布局","choice":"floating","id":null,"timestamp":1773975815156}
+{"source":"user-event","type":"click","text":"B\n    \n      左侧垂直标签栏\n      左侧垂直标签堆叠，右侧主内容区更宽敞","choice":"sidebar","id":null,"timestamp":1773975820006}
+{"source":"user-event","type":"click","text":"A\n    \n      水平标签栏 + 均分布局\n      顶部水平标签栏，三个标签等宽分布","choice":"horizontal","id":null,"timestamp":1773975821106}
+{"source":"user-event","type":"click","text":"B\n    \n      左侧垂直标签栏\n      左侧垂直标签堆叠，右侧主内容区更宽敞","choice":"sidebar","id":null,"timestamp":1773975827590}
+{"source":"user-event","type":"click","text":"A\n    \n      水平标签栏 + 均分布局\n      顶部水平标签栏，三个标签等宽分布","choice":"horizontal","id":null,"timestamp":1773975876473}
+{"source":"user-event","type":"click","text":"A\n    \n      水平标签栏 + 均分布局\n      顶部水平标签栏，三个标签等宽分布","choice":"horizontal","id":null,"timestamp":1773975900490}
+{"source":"user-event","type":"click","text":"A\n    \n      水平标签栏 + 均分布局\n      顶部水平标签栏，三个标签等宽分布","choice":"horizontal","id":null,"timestamp":1773975900605}

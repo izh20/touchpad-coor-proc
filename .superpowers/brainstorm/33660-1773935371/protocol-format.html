@@ -1,0 +1,28 @@
+<h2>I2C 协议解析显示格式</h2>
+<p class="subtitle">协议解析结果如何呈现？</p>
+
+<div class="options">
+  <div class="option" data-choice="table" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>表格形式</h3>
+      <p>每行一条 I2C 事务：地址 | 命令/数据 | 时间戳。紧凑清晰。</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="tree" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>层级树状</h3>
+      <p>START → 地址 → 数据字节 → STOP 逐层缩进，类似 Logic2。</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="both" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>同时显示两种</h3>
+      <p>主视图表格，点击展开显示层级详情。</p>
+    </div>
+  </div>
+</div>

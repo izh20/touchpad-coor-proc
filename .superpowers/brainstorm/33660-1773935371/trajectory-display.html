@@ -1,0 +1,28 @@
+<h2>手指轨迹显示设置</h2>
+<p class="subtitle">轨迹数据同步和显示方式？</p>
+
+<div class="options">
+  <div class="option" data-choice="sync" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>时间同步显示</h3>
+      <p>I2C 事件和手指轨迹按时间轴对齐，同步播放/暂停。</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="independent" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>独立播放控制</h3>
+      <p>轨迹有自己的播放控制，仅在同一时间点标注对应 I2C 事件。</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="overlay" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>叠加显示</h3>
+      <p>手指轨迹直接叠加在波形时间轴上，点击轨迹点高亮对应 I2C 事务。</p>
+    </div>
+  </div>
+</div>

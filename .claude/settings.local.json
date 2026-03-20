@@ -9,7 +9,9 @@
       "Bash(python3 /tmp/debug_i2c.py)",
       "Bash(pip install:*)",
       "Bash(pip3 install:*)",
-      "Bash(python3 -c \"from saleae import saleae; print\\(''saleae lib available''\\)\")"
+      "Bash(python3 -c \"from saleae import saleae; print\\(''saleae lib available''\\)\")",
+      "Bash(/Users/zhouheng/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.5/skills/brainstorming/scripts/start-server.sh --project-dir /Users/zhouheng/hid-iic-analyzer)",
+      "Bash(cat /Users/zhouheng/hid-iic-analyzer/.superpowers/brainstorm/*/.server-info)"
     ]
   }
 }
