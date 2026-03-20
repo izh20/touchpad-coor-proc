@@ -56,7 +56,7 @@ class TrajectoryRenderer:
         0: (128, 128, 128), # UNKNOWN - 灰色
     }
 
-    def __init__(self, trajectories):
+    def __init__(self, trajectories, xmin=None, xmax=None, ymin=None, ymax=None):
         pygame.init()
 
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -76,22 +76,67 @@ class TrajectoryRenderer:
         self.playing = True
 
         # 坐标范围 (用于缩放)
-        all_points = []
-        for pts in trajectories.values():
-            all_points.extend(pts)
+        # 支持外部指定分辨率/边界（xmin/xmax/ymin/ymax），若未指定则自动计算
+        self.x_min = xmin
+        self.x_max = xmax
+        self.y_min = ymin
+        self.y_max = ymax
 
-        if all_points:
-            self.x_min = min(p.x for p in all_points)
-            self.x_max = max(p.x for p in all_points)
-            self.y_min = min(p.y for p in all_points)
-            self.y_max = max(p.y for p in all_points)
-        else:
+        if None in (self.x_min, self.x_max, self.y_min, self.y_max):
+            all_points = []
+            for pts in trajectories.values():
+                all_points.extend(pts)
+
+            if all_points:
+                auto_x_min = min(p.x for p in all_points)
+                auto_x_max = max(p.x for p in all_points)
+                auto_y_min = min(p.y for p in all_points)
+                auto_y_max = max(p.y for p in all_points)
+            else:
+                auto_x_min, auto_x_max = 0, 4000
+                auto_y_min, auto_y_max = 0, 2000
+
+            # 对于未传入的项使用自动计算值
+            if self.x_min is None:
+                self.x_min = auto_x_min
+            if self.x_max is None:
+                self.x_max = auto_x_max
+            if self.y_min is None:
+                self.y_min = auto_y_min
+            if self.y_max is None:
+                self.y_max = auto_y_max
+
+        # 校验并确保范围有效
+        try:
+            if self.x_min >= self.x_max:
+                print('Warning: xmin >= xmax, ignoring custom X bounds and falling back to auto')
+                # 重新计算 auto
+                all_points = []
+                for pts in trajectories.values():
+                    all_points.extend(pts)
+                if all_points:
+                    self.x_min = min(p.x for p in all_points)
+                    self.x_max = max(p.x for p in all_points)
+                else:
+                    self.x_min, self.x_max = 0, 4000
+            if self.y_min >= self.y_max:
+                print('Warning: ymin >= ymax, ignoring custom Y bounds and falling back to auto')
+                all_points = []
+                for pts in trajectories.values():
+                    all_points.extend(pts)
+                if all_points:
+                    self.y_min = min(p.y for p in all_points)
+                    self.y_max = max(p.y for p in all_points)
+                else:
+                    self.y_min, self.y_max = 0, 2000
+        except Exception:
+            # 任何异常时回退到默认安全范围
             self.x_min, self.x_max = 0, 4000
             self.y_min, self.y_max = 0, 2000
 
         # 添加边距
-        x_margin = (self.x_max - self.x_min) * 0.1
-        y_margin = (self.y_max - self.y_min) * 0.1
+        x_margin = (self.x_max - self.x_min) * 0.1 if (self.x_max - self.x_min) != 0 else 1
+        y_margin = (self.y_max - self.y_min) * 0.1 if (self.y_max - self.y_min) != 0 else 1
         self.x_min -= x_margin
         self.x_max += x_margin
         self.y_min -= y_margin
@@ -107,8 +152,12 @@ class TrajectoryRenderer:
 
     def coord_to_screen(self, x, y):
         """将数据坐标转换为屏幕坐标"""
-        screen_x = int((x - self.x_min) / (self.x_max - self.x_min) * (SCREEN_WIDTH - 100)) + 50
-        screen_y = int((self.y_max - y) / (self.y_max - self.y_min) * (SCREEN_HEIGHT - 150)) + 50
+        # 防止除以零
+        x_span = (self.x_max - self.x_min) if (self.x_max - self.x_min) != 0 else 1
+        y_span = (self.y_max - self.y_min) if (self.y_max - self.y_min) != 0 else 1
+        screen_x = int((x - self.x_min) / x_span * (SCREEN_WIDTH - 100)) + 50
+        # 映射调整：使得数据坐标 Y 增大时屏幕坐标 Y 也增大（向下）
+        screen_y = int((y - self.y_min) / y_span * (SCREEN_HEIGHT - 150)) + 50
         return screen_x, screen_y
 
     def handle_events(self):
@@ -211,6 +260,27 @@ class TrajectoryRenderer:
         frame_text = self.font.render(f'Frame {self.current_frame}/{total_frames}', True, self.WHITE)
         self.screen.blit(frame_text, (10, 10))
 
+        # 左上角下方：每个 ID 的当前坐标（基于当前帧前最后一个点）
+        coords_x = 10
+        coords_y = 60
+        for finger_id in sorted(self.trajectories.keys()):
+            pts = self.trajectories.get(finger_id, [])
+            # 仅显示当前可见范围内的坐标
+            start_idx = self.visible_start_indices.get(finger_id, 0)
+            end_idx = self.visible_end_indices.get(finger_id, 0)
+            if end_idx > start_idx and end_idx <= len(pts):
+                cur = pts[end_idx - 1]
+                # 仅显示数据坐标（十进制）
+                coord_line = f'F{finger_id}: X:{cur.x} Y:{cur.y}'
+            else:
+                # 若当前 ID 在本帧不可见，则跳过显示
+                continue
+
+            color = self.FINGER_COLORS[finger_id % len(self.FINGER_COLORS)]
+            text = self.font.render(coord_line, True, color)
+            self.screen.blit(text, (coords_x, coords_y))
+            coords_y += 20
+
         # 绘制坐标轴
         pygame.draw.line(self.screen, self.GRAY, (50, SCREEN_HEIGHT - 50), (SCREEN_WIDTH - 50, SCREEN_HEIGHT - 50), 2)  # X轴
         pygame.draw.line(self.screen, self.GRAY, (50, SCREEN_HEIGHT - 50), (50, 50), 2)  # Y轴
@@ -275,6 +345,7 @@ class TrajectoryRenderer:
                 # 大面积标签
                 label = self.font.render(f'AREA{finger_id}', True, color)
                 self.screen.blit(label, (x + 18, y - 18))
+                
 
             else:
                 # 手指：细线 + 小空心点
@@ -296,6 +367,7 @@ class TrajectoryRenderer:
                 # 手指ID标签
                 label = self.font.render(f'F{finger_id}', True, color)
                 self.screen.blit(label, (x + 10, y - 10))
+                
 
             pass
 
@@ -370,6 +442,10 @@ class TrajectoryRenderer:
 def main():
     parser = argparse.ArgumentParser(description='Finger Trajectory Realtime Viewer (Pygame)')
     parser.add_argument('input_file', help='Input CSV file path')
+    parser.add_argument('--xmin', type=float, help='Optional: set minimum X value for axis')
+    parser.add_argument('--xmax', type=float, help='Optional: set maximum X value for axis')
+    parser.add_argument('--ymin', type=float, help='Optional: set minimum Y value for axis')
+    parser.add_argument('--ymax', type=float, help='Optional: set maximum Y value for axis')
     args = parser.parse_args()
 
     print(f"Parsing file: {args.input_file}")
@@ -394,7 +470,8 @@ def main():
     print("  +/-: Adjust speed")
     print("  ESC: Quit")
 
-    renderer = TrajectoryRenderer(trajectories)
+    # 传递可选的自定义边界到渲染器
+    renderer = TrajectoryRenderer(trajectories, xmin=args.xmin, xmax=args.xmax, ymin=args.ymin, ymax=args.ymax)
     renderer.run()
 
 

@@ -39,14 +39,23 @@
 ### 基本用法
 
 ```bash
-# 运行实时轨迹查看器
+# 运行实时轨迹查看器（自动计算坐标范围）
 python3 finger_trajectory_realtime.py <数据文件.txt>
 
-# 示例
-python3 finger_trajectory_realtime.py 手指包数据.txt
+# 可选：显式指定坐标轴范围以设置 X/Y 分辨率
+python3 finger_trajectory_realtime.py --xmin 0 --xmax 4000 --ymin 0 --ymax 2000 <数据文件.txt>
+
+# 推荐（默认）
+# 使用显式坐标范围以避免显示问题（推荐）
+python3 finger_trajectory_realtime.py --xmin 0 --xmax 3685 --ymin 0 --ymax 2640 2.txt
+
+# 快速自动模式（程序自动计算范围）
 python3 finger_trajectory_realtime.py 2.txt
-python3 finger_trajectory_realtime.py 3.txt
 ```
+
+### 设置坐标轴分辨率
+
+可以通过 `--xmin/--xmax/--ymin/--ymax` 四个可选参数显式指定数据坐标映射到显示区域时使用的坐标范围，从而手动控制 X、Y 轴的“分辨率”。当未指定时，程序会根据数据自动计算范围并在两端添加 10% 的边距。注意：若传入不合法的范围（如 `xmin >= xmax`），程序会忽略自定义值并回退到自动计算。
 
 ### 依赖安装
 
