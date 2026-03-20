@@ -90,6 +90,7 @@ i2c-analyzer/
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "^4.2.0",
     "electron-builder": "^24.0.0",
+    "jest": "^29.7.0",
     "typescript": "^5.3.0",
     "vite": "^5.0.0",
     "vite-plugin-electron": "^0.28.0"
@@ -595,17 +596,15 @@ export function decodeI2CWaveforms(samples: I2CWaveformSample[]): I2CTransaction
         // ACK bit after address
         gotAck = !bit // ACK = slave pulls SDA low (bit = 0 means ACK)
       } else {
-        // Data bits 9-16, 17-24, etc. (8 data bits + ACK)
+        // Data bits 9-16 (1st byte), 17-24 (2nd byte), etc. (8 data bits + ACK each)
         const dataBitIndex = (bitCount - 9) % 9
         if (dataBitIndex < 8) {
           // Data bit (shift in MSB first)
           currentByte = (currentByte << 1) | bit
         } else if (dataBitIndex === 8) {
-          // ACK bit after data byte
-          if (bitCount >= 17) { // Only push data after first data byte (address ACK handled above)
-            currentData.push(currentByte)
-            currentByte = 0
-          }
+          // ACK bit after data byte - push the completed byte
+          currentData.push(currentByte)
+          currentByte = 0
           gotAck = !bit
         }
       }
