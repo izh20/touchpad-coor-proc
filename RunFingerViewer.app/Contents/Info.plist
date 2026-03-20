@@ -16,5 +16,19 @@
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Data File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.data</string>
+                <string>public.text</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
