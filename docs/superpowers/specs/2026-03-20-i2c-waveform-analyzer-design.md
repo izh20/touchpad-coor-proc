@@ -8,7 +8,16 @@
 
 - **Electron** - 跨平台桌面框架
 - **React 18** - UI 框架
-- **Logic2 自动化 API** - 实时获取 I2C 数据
+- **解析 .sal 文件** - 从 Logic2 导出的文件中读取数据
+
+## 数据源说明
+
+所有数据来自 Logic2 导出的 `.sal` 文件：
+- **I2C 波形**: SCL/SDA 原始信号
+- **I2C 协议**: 从波形解码出的事务（地址、读写、数据）
+- **手指轨迹**: 从 I2C 数据载荷中解析出的 HID 手指包坐标
+
+三层视图共享同一时间基准，数据天然同步。
 
 ## 界面布局
 
@@ -44,16 +53,23 @@
 
 ### 1. 数据采集模块 (Main Process)
 
-**职责**：通过 Logic2 API 获取实时数据
+**职责**：解析 .sal 文件，提取 I2C 波形、协议和手指轨迹数据
 
 ```
-Logic2 Automation API → Main Process → IPC Bridge → Renderer
+.sal 文件 → Main Process → 解析 → IPC Bridge → Renderer
 ```
+
+**解析流程**：
+1. 读取 .sal 文件
+2. 提取 I2C 采样数据（SCL/SDA 波形）
+3. 解码 I2C 事务（START/地址/数据/STOP）
+4. 从 I2C 数据载荷解析手指包（47字节/帧）
 
 **接口**：
-- `connectToLogic2()` - 建立连接
-- `onI2CData(callback)` - 实时 I2C 数据回调
-- `onFingerData(callback)` - 实时手指轨迹回调
+- `openSalFile(path)` - 打开 .sal 文件
+- `getWaveformData()` - 获取 I2C 波形数据
+- `getProtocolTransactions()` - 获取 I2C 事务列表
+- `getFingerFrames()` - 获取手指轨迹帧数据
 
 ### 2. 波形显示组件 (WaveformTab)
 
@@ -105,6 +121,48 @@ Logic2 Automation API → Main Process → IPC Bridge → Renderer
 - 手指轨迹: 细线 (2px) + 空心圆
 - 大面积轨迹: 粗线 (6px) + 实心圆
 - 多指区分颜色
+
+### 5. 手指包数据解析规范
+
+每帧 HID 手指包为 **47 字节**，包含 5 个手指槽位，每个槽位 **8 字节**。
+
+**槽位偏移表**：
+
+| 槽位 | 起始字节 |
+|------|---------|
+| Slot 0 | Byte 3 |
+| Slot 1 | Byte 11 |
+| Slot 2 | Byte 19 |
+| Slot 3 | Byte 27 |
+| Slot 4 | Byte 35 |
+
+**单槽位结构**（8 字节）：
+
+| 槽内偏移 | 名称 | 说明 |
+|---------|------|------|
+| 0 | FingerStatus | 高4bit=手指ID(0-9)，低4bit=状态(0-3) |
+| 1 | X[7:0] | X坐标低8位 |
+| 2 | X[15:8] | X坐标高8位 |
+| 3 | Y[7:0] | Y坐标低8位 |
+| 4 | Y[15:8] | Y坐标高8位 |
+| 5 | Reserved | 保留 |
+| 6 | Reserved | 保留 |
+| 7 | Pressure | 压力值 |
+
+**坐标计算**（16-bit 小端）：
+```
+X = (X_high << 8) | X_low
+Y = (Y_high << 8) | Y_low
+```
+
+**状态定义**：
+
+| 状态值 | 含义 | 处理 |
+|--------|------|------|
+| 3 | 手指按下 (Finger Touch) | 添加点到轨迹，细线渲染 |
+| 2 | 大面积按下 (Large Touch) | 添加点到轨迹，粗线渲染 |
+| 1 | 手指抬起 (Finger Release) | 清除该手指ID的轨迹 |
+| 0 | 大面积抬起 (Large Release) | 清除该手指ID的轨迹 |
 
 ### 5. 数据缓存
 
