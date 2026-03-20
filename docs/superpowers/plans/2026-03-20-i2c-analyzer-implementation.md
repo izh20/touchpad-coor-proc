@@ -206,19 +206,84 @@ contextBridge.exposeInMainWorld('electronAPI', {
 })
 ```
 
-- [ ] **Step 7: Install dependencies**
+- [ ] **Step 6b: Create src/main.tsx**
+
+```typescript
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+import './styles/global.css'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+)
+```
+
+- [ ] **Step 7: Update vite.config.ts with electron plugin**
+
+```typescript
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import electron from 'vite-plugin-electron'
+import path from 'path'
+
+export default defineConfig({
+  plugins: [
+    react(),
+    electron([
+      {
+        entry: 'electron/main.ts',
+        onstart(options) {
+          options.startup()
+        },
+        vite: {
+          build: {
+            outDir: 'dist-electron',
+            rollupOptions: {
+              external: ['electron']
+            }
+          }
+        }
+      },
+      {
+        entry: 'electron/preload.ts',
+        onstart(options) {
+          options.reload()
+        },
+        vite: {
+          build: {
+            outDir: 'dist-electron',
+            rollupOptions: {
+              external: ['electron']
+            }
+          }
+        }
+      }
+    ])
+  ],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src')
+    }
+  }
+})
+```
+
+- [ ] **Step 9: Install dependencies**
 
 Run: `npm install`
 
-- [ ] **Step 8: Verify dev server starts**
+- [ ] **Step 10: Verify dev server starts**
 
 Run: `npm run dev`
-Expected: Vite dev server starts on port 5173
+Expected: Vite dev server starts on port 5173 with Electron
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add package.json vite.config.ts tsconfig.json index.html electron/
+git add package.json vite.config.ts tsconfig.json tsconfig.node.json index.html electron/ src/main.tsx
 git commit -m "feat: scaffold Electron + React + Vite project"
 ```
 
@@ -456,6 +521,7 @@ import type { I2CWaveformSample, I2CTransaction } from '../../src/types'
  * - START: SDA falling while SCL is high
  * - STOP: SDA rising while SCL is high
  * - Data: Sampled on SCL rising edge (MSB first)
+ * - ACK: 9th clock cycle - slave pulls SDA low (ACK) or SDA stays high (NACK)
  */
 export function decodeI2CWaveforms(samples: I2CWaveformSample[]): I2CTransaction[] {
   const transactions: I2CTransaction[] = []
@@ -465,9 +531,9 @@ export function decodeI2CWaveforms(samples: I2CWaveformSample[]): I2CTransaction
   let currentDirection: 'read' | 'write' = 'write'
   let currentData: number[] = []
   let startTime = 0
-  let bitBuffer = 0
-  let bitCount = 0
+  let bitCount = 0      // Total bits since START (including address + data)
   let currentByte = 0
+  let gotAck = false
 
   for (let i = 1; i < samples.length; i++) {
     const prev = samples[i - 1]
@@ -481,7 +547,7 @@ export function decodeI2CWaveforms(samples: I2CWaveformSample[]): I2CTransaction
           address: currentAddress,
           direction: currentDirection,
           data: [...currentData],
-          ack: true,
+          ack: gotAck,
           startTime,
           endTime: prev.timestamp
         })
@@ -490,8 +556,8 @@ export function decodeI2CWaveforms(samples: I2CWaveformSample[]): I2CTransaction
       startTime = curr.timestamp
       currentData = []
       bitCount = 0
-      bitBuffer = 0
       currentByte = 0
+      gotAck = false
       continue
     }
 
@@ -503,7 +569,7 @@ export function decodeI2CWaveforms(samples: I2CWaveformSample[]): I2CTransaction
           address: currentAddress,
           direction: currentDirection,
           data: [...currentData],
-          ack: true,
+          ack: gotAck,
           startTime,
           endTime: curr.timestamp
         })
@@ -516,26 +582,35 @@ export function decodeI2CWaveforms(samples: I2CWaveformSample[]): I2CTransaction
 
     // Sample data bit on SCL rising edge
     if (!prev.scl && curr.scl && inTransaction) {
-      bitBuffer = (bitBuffer << 1) | (curr.sda ? 1 : 0)
-      bitCount++
+      const bit = curr.sda ? 1 : 0
 
-      // Address phase: first 7 bits + R/W bit (8 bits total)
-      if (bitCount <= 8) {
-        currentByte = bitBuffer
-        if (bitCount === 8) {
+      // Address phase: bits 0-7 (7-bit address + R/W)
+      if (bitCount < 8) {
+        currentByte = (currentByte << 1) | bit
+        if (bitCount === 7) {
           currentAddress = currentByte >> 1
           currentDirection = (currentByte & 1) === 0 ? 'write' : 'read'
         }
+      } else if (bitCount === 8) {
+        // ACK bit after address
+        gotAck = !bit // ACK = slave pulls SDA low (bit = 0 means ACK)
       } else {
-        // Data phase: 8 bits per byte
-        if (bitCount % 8 === 0) {
-          currentData.push(currentByte)
-          currentByte = 0
-          bitBuffer = 0
-        } else {
-          currentByte = (currentByte << 1) | (curr.sda ? 1 : 0)
+        // Data bits 9-16, 17-24, etc. (8 data bits + ACK)
+        const dataBitIndex = (bitCount - 9) % 9
+        if (dataBitIndex < 8) {
+          // Data bit (shift in MSB first)
+          currentByte = (currentByte << 1) | bit
+        } else if (dataBitIndex === 8) {
+          // ACK bit after data byte
+          if (bitCount >= 17) { // Only push data after first data byte (address ACK handled above)
+            currentData.push(currentByte)
+            currentByte = 0
+          }
+          gotAck = !bit
         }
       }
+
+      bitCount++
     }
   }
 
