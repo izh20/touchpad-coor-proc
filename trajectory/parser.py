@@ -2,7 +2,11 @@
 from collections import defaultdict
 
 PACKET_SIZE = 47
-FINGER_REPORT_ID = 0x2F
+# 同步头字节：历史样本中每包前3字节为 0x2F, 0x00, 0x04
+SYNC_BYTE = 0x2F
+SYNC_ZERO = 0x00
+# 真实的 report id 在第三字节（0-based 索引 i+2）
+REPORT_ID = 0x04
 FINGER_SLOTS = [3, 11, 19, 27, 35]
 
 class FingerPoint:
@@ -42,7 +46,19 @@ class FingerDataParser:
 
         packet_raws = {}
         while i < len(lines):
-            if lines[i] == FINGER_REPORT_ID:
+            # 支持两种同步方式：
+            # 1) 一些样本仅以 0x2F 同步（向前兼容）
+            # 2) 新样本使用三字节同步头 0x2F, 0x00, 0x04（其中 0x04 为实际 report id）
+            is_sync = False
+            if lines[i] == SYNC_BYTE:
+                # 检查是否有三字节同步头
+                if i + 2 < len(lines) and lines[i + 1] == SYNC_ZERO and lines[i + 2] == REPORT_ID:
+                    is_sync = True
+                else:
+                    # 兼容：仅 0x2F 作为同步头
+                    is_sync = True
+
+            if is_sync:
                 pkt = lines[i:i + PACKET_SIZE]
                 if len(pkt) == PACKET_SIZE:
                     # 固定解析：scantime/ finger count / key state 紧随第5槽位之后
