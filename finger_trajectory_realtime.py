@@ -9,10 +9,13 @@ import sys
 from collections import defaultdict
 from trajectory.parser import FingerDataParser, FingerPoint
 import argparse
+import time
 
 # 坐标包配置
 PACKET_SIZE = 47           # 每包47字节
-FINGER_REPORT_ID = 0x2F    # 手指包起始标识
+# 同步头：0x2F,0x00,0x04 （其中 0x04 为实际 report id）
+FINGER_SYNC = (0x2F, 0x00, 0x04)
+FINGER_REPORT_ID = 0x04    # 实际 report id（用于显示/文档参考）
 
 FINGER_SLOTS = [3, 11, 19, 27, 35]
 
@@ -82,6 +85,14 @@ class TrajectoryRenderer:
 
         # 播放控制：播放/暂停
         self.playing = True
+
+        # 按键长按控制（用于 LEFT/RIGHT 连续翻帧）
+        self.right_held = False
+        self.left_held = False
+        # 重复参数：按下后等待 delay 秒，然后每 interval 秒重复一次
+        self.key_repeat_delay = 0.18
+        self.key_repeat_interval = 0.06
+        self._last_key_action = 0.0
 
         # 坐标范围 (用于缩放)
         # 支持外部指定分辨率/边界（xmin/xmax/ymin/ymax），若未指定则自动计算
@@ -189,18 +200,13 @@ class TrajectoryRenderer:
                     state = 'Paused' if not self.playing else f'{self.fps}Hz'
                     pygame.display.set_caption(f'Finger Trajectory Viewer - {state}')
                 elif event.key == pygame.K_RIGHT:
-                    # 逐帧前进（按键触发）
-                    if self.current_frame < self.max_frames - 1:
-                        self.current_frame += 1
-                    else:
-                        self.current_frame = 0
+                    # 标记为持有，实际推进在 update() 中处理（支持长按）
+                    self.right_held = True
+                    # 重置计时以立即响应
+                    self._last_key_action = 0.0
                 elif event.key == pygame.K_LEFT:
-                    # 逐帧后退（按键触发）
-                    if self.current_frame > 0:
-                        self.current_frame -= 1
-                    else:
-                        # 回到最后一帧，保持与右键对称行为
-                        self.current_frame = max(0, self.max_frames - 1)
+                    self.left_held = True
+                    self._last_key_action = 0.0
                 elif event.key == pygame.K_r:
                     # R键重置
                     self.current_frame = 0
@@ -219,6 +225,11 @@ class TrajectoryRenderer:
                     self.fps = max(self.fps - 10, 10)
                     pygame.display.set_caption(f'Finger Trajectory Viewer - {self.fps}Hz')
                     self.clock = pygame.time.Clock()
+            elif event.type == pygame.KEYUP:
+                if event.key == pygame.K_RIGHT:
+                    self.right_held = False
+                elif event.key == pygame.K_LEFT:
+                    self.left_held = False
         return True
 
     def update(self):
@@ -229,6 +240,37 @@ class TrajectoryRenderer:
                 self.current_frame += 1
             else:
                 self.current_frame = 0
+        # 处理按键长按：当 left/right 被按住时按 repeat 规则推进或后退帧
+        now = time.time()
+        if self.right_held or self.left_held:
+            # 如果上次时间为 0 或被重置为 0.0，立即触发一次
+            if self._last_key_action == 0.0:
+                trigger = True
+                self._last_key_action = now
+            else:
+                elapsed = now - self._last_key_action
+                # 首次触发需超过 delay，随后每 interval 触发一次
+                if elapsed >= self.key_repeat_delay:
+                    # 计算自上次动作后的次数
+                    trigger = True
+                    # 设置为当前时间以节奏控制（不累积多次）
+                    self._last_key_action = now - (elapsed % self.key_repeat_interval)
+                else:
+                    trigger = False
+
+            if trigger:
+                if self.right_held and not self.left_held:
+                    # 前进一帧
+                    if self.current_frame < self.max_frames - 1:
+                        self.current_frame += 1
+                    else:
+                        self.current_frame = 0
+                elif self.left_held and not self.right_held:
+                    # 后退一帧
+                    if self.current_frame > 0:
+                        self.current_frame -= 1
+                    else:
+                        self.current_frame = max(0, self.max_frames - 1)
 
         # 检查当前帧的手指释放
         self.check_releases()
