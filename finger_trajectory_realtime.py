@@ -56,7 +56,7 @@ class TrajectoryRenderer:
         0: (128, 128, 128), # UNKNOWN - 灰色
     }
 
-    def __init__(self, trajectories, xmin=None, xmax=None, ymin=None, ymax=None):
+    def __init__(self, trajectories, xmin=None, xmax=None, ymin=None, ymax=None, packet_scantimes=None):
         pygame.init()
 
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -148,6 +148,10 @@ class TrajectoryRenderer:
 
         # 控制说明
         self.show_controls = True
+        # 每包 scantime 映射: packet_index -> scantime (u16)
+        self.packet_scantimes = packet_scantimes or {}
+        # scantime 显示模式：False=基于可见点，True=基于数据起始包（便于调试）
+        self.force_earliest_packet_mode = False
         
 
     def coord_to_screen(self, x, y):
@@ -180,11 +184,21 @@ class TrajectoryRenderer:
                         self.current_frame += 1
                     else:
                         self.current_frame = 0
+                elif event.key == pygame.K_LEFT:
+                    # 逐帧后退（按键触发）
+                    if self.current_frame > 0:
+                        self.current_frame -= 1
+                    else:
+                        # 回到最后一帧，保持与右键对称行为
+                        self.current_frame = max(0, self.max_frames - 1)
                 elif event.key == pygame.K_r:
                     # R键重置
                     self.current_frame = 0
                     self.visible_start_indices = {}
                     self.visible_end_indices = {}
+                elif event.key == pygame.K_k:
+                    # 切换 scantime 显示模式（可见点或最早包），便于调试 key 状态
+                    self.force_earliest_packet_mode = not self.force_earliest_packet_mode
                 elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
                     # 加速
                     self.fps = min(self.fps + 10, 500)
@@ -260,9 +274,50 @@ class TrajectoryRenderer:
         frame_text = self.font.render(f'Frame {self.current_frame}/{total_frames}', True, self.WHITE)
         self.screen.blit(frame_text, (10, 10))
 
+        # 选择用于显示 scantime 的 packet_index：
+        # 默认采用当前可见点中最大的 packet_index；按 `k` 切换为最早包（调试用）
+        display_packet_index = None
+        if self.force_earliest_packet_mode:
+            # 使用数据中最早的 packet_index（若存在）
+            if self.packet_scantimes:
+                display_packet_index = min(self.packet_scantimes.keys())
+        else:
+            for fid, pts in self.trajectories.items():
+                start_idx = self.visible_start_indices.get(fid, 0)
+                end_idx = self.visible_end_indices.get(fid, 0)
+                if end_idx > start_idx and end_idx <= len(pts):
+                    display_packet_index = max(display_packet_index or 0, pts[end_idx - 1].packet_index)
+
+        # 显示对应的 scantime（若存在）——使用可见点的 packet_index 映射
+        scantime_val = self.packet_scantimes.get(display_packet_index) if display_packet_index is not None else None
+        if isinstance(scantime_val, tuple) and (len(scantime_val) >= 2):
+            low, high = scantime_val[0], scantime_val[1]
+            # little-endian u16
+            scantime_u16 = low | (high << 8)
+            # 可能的手指个数字段与按键状态
+            finger_cnt = scantime_val[2] if len(scantime_val) >= 3 else None
+            key_state = scantime_val[3] if len(scantime_val) >= 4 else None
+            if finger_cnt is None:
+                base_str = f'ScanTime: {scantime_u16}'
+            else:
+                base_str = f'ScanTime: {scantime_u16}  Fingers: {finger_cnt}'
+            base_text = self.font.render(base_str, True, self.WHITE)
+            self.screen.blit(base_text, (10, 34))
+            # 显示当前使用的 packet index 以便排查
+            mode_text = 'Mode: EARLIEST' if self.force_earliest_packet_mode else 'Mode: VISIBLE'
+            self.screen.blit(self.font.render(mode_text, True, self.GRAY), (10, 58))
+            # 若按键按下 (1)，高亮显示 Key: DOWN
+            if key_state == 1:
+                key_text = self.font.render('Key: DOWN', True, (255, 50, 50))
+                x_off = 10 + self.font.size(base_str)[0] + 8
+                self.screen.blit(key_text, (x_off, 34))
+        else:
+            base_text = self.font.render('ScanTime: -', True, self.WHITE)
+            self.screen.blit(base_text, (10, 34))
         # 左上角下方：每个 ID 的当前坐标（基于当前帧前最后一个点）
         coords_x = 10
-        coords_y = 60
+        # 将坐标列表下移，避免与 FPS/ScanTime 重叠
+        coords_y = 90
         for finger_id in sorted(self.trajectories.keys()):
             pts = self.trajectories.get(finger_id, [])
             # 仅显示当前可见范围内的坐标
@@ -418,9 +473,9 @@ class TrajectoryRenderer:
                 self.screen.blit(text, (10, cy))
                 cy += 20
 
-        # FPS（稍下方，避免与帧计数重合）
+        # FPS（放在左上较下方）
         fps_text = self.font.render(f'FPS: {self.fps}', True, self.WHITE)
-        self.screen.blit(fps_text, (10, 40))
+        self.screen.blit(fps_text, (10, 58))
 
         pygame.display.flip()
 
@@ -451,7 +506,7 @@ def main():
     print(f"Parsing file: {args.input_file}")
 
     parser_obj = FingerDataParser()
-    trajectories, total_packets = parser_obj.process_csv_data(args.input_file)
+    trajectories, total_packets, packet_scantimes = parser_obj.process_csv_data(args.input_file)
 
     print(f"Total packets: {total_packets}")
     print(f"Trajectories found:")
@@ -471,7 +526,7 @@ def main():
     print("  ESC: Quit")
 
     # 传递可选的自定义边界到渲染器
-    renderer = TrajectoryRenderer(trajectories, xmin=args.xmin, xmax=args.xmax, ymin=args.ymin, ymax=args.ymax)
+    renderer = TrajectoryRenderer(trajectories, xmin=args.xmin, xmax=args.xmax, ymin=args.ymin, ymax=args.ymax, packet_scantimes=packet_scantimes)
     renderer.run()
 
 
