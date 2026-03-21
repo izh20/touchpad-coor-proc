@@ -23,7 +23,9 @@ class FingerDataParser:
         return int(hex_str)
 
     def process_csv_data(self, csv_path):
-        """处理CSV文件，提取手指轨迹，返回 trajectories(dict->list[FingerPoint]) 和 packet_count"""
+        """处理CSV文件，提取手指轨迹，返回 trajectories(dict->list[FingerPoint]) 和 packet_count 以及 packet_scantimes
+        packet_scantimes: dict(packet_index) -> (low, high, finger_cnt, key_state)
+        """
         lines = []
         with open(csv_path, 'r') as f:
             header = f.readline()
@@ -42,57 +44,21 @@ class FingerDataParser:
             if lines[i] == FINGER_REPORT_ID:
                 pkt = lines[i:i + PACKET_SIZE]
                 if len(pkt) == PACKET_SIZE:
-                    # 提取 scantime（第44与第45字节，little-endian u16）
+                    # 固定解析：scantime/ finger count / key state 紧随第5槽位之后
                     try:
-                        # 多重候选位置检测：优先查找非全零的两字节组合
-                        last_slot = FINGER_SLOTS[-1]
-                        candidates = [
-                            (last_slot + 5, last_slot + 6),
-                            (PACKET_SIZE - 4, PACKET_SIZE - 3),
-                            (PACKET_SIZE - 3, PACKET_SIZE - 2),
-                            (last_slot + 6, last_slot + 7),
-                        ]
-
-                        found = None
-                        for low_idx, high_idx in candidates:
-                            if 0 <= low_idx < len(pkt) and 0 <= high_idx < len(pkt):
-                                low = pkt[low_idx]
-                                high = pkt[high_idx]
-                                # 若任一字节非零，则认为找到了合理的 scantime 字段
-                                if (low != 0) or (high != 0):
-                                    # 尝试读取紧随的一个字节作为手指个数（若存在）
-                                    # 以及随后一个字节作为按键状态
-                                    finger_cnt = None
-                                    key_state = None
-                                    cnt_idx = high_idx + 1
-                                    if 0 <= cnt_idx < len(pkt):
-                                        finger_cnt = pkt[cnt_idx]
-                                    key_idx = cnt_idx + 1
-                                    if 0 <= key_idx < len(pkt):
-                                        key_state = pkt[key_idx]
-                                    found = (low, high, finger_cnt, key_state)
-                                    break
-
-                        # 如果都为零，仍回退到 PACKET_SIZE-3/ -2 的位置（历史上曾使用 44/45）
-                        if not found:
-                            low_idx = PACKET_SIZE - 3
-                            high_idx = PACKET_SIZE - 2
-                            if 0 <= low_idx < len(pkt) and 0 <= high_idx < len(pkt):
-                                low = pkt[low_idx]
-                                high = pkt[high_idx]
-                                finger_cnt = None
-                                key_state = None
-                                cnt_idx = high_idx + 1
-                                if 0 <= cnt_idx < len(pkt):
-                                    finger_cnt = pkt[cnt_idx]
-                                key_idx = cnt_idx + 1
-                                if 0 <= key_idx < len(pkt):
-                                    key_state = pkt[key_idx]
-                                found = (low, high, finger_cnt, key_state)
-                            else:
-                                found = None
-
-                        packet_scantimes[packet_index] = found
+                        # 使用 0-based 索引：byte[43] = low, byte[44] = high, byte[45]=finger_cnt, byte[46]=key_state
+                        low_idx = 43
+                        high_idx = 44
+                        cnt_idx = 45
+                        key_idx = 46
+                        if 0 <= low_idx < len(pkt) and 0 <= high_idx < len(pkt):
+                            low = pkt[low_idx]
+                            high = pkt[high_idx]
+                            finger_cnt = pkt[cnt_idx] if 0 <= cnt_idx < len(pkt) else None
+                            key_state = pkt[key_idx] if 0 <= key_idx < len(pkt) else None
+                            packet_scantimes[packet_index] = (low, high, finger_cnt, key_state)
+                        else:
+                            packet_scantimes[packet_index] = None
                     except Exception:
                         packet_scantimes[packet_index] = None
 
