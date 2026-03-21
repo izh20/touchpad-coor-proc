@@ -43,7 +43,7 @@
 python3 finger_trajectory_realtime.py <数据文件.txt>
 
 # 可选：显式指定坐标轴范围以设置 X/Y 分辨率
-python3 finger_trajectory_realtime.py --xmin 0 --xmax 4000 --ymin 0 --ymax 2000 <数据文件.txt>
+python3 finger_trajectory_realtime.py --xmin 0 --xmax 3685 --ymin 0 --ymax 2640 <数据文件.txt>
 
 # 推荐（默认）
 # 使用显式坐标范围以避免显示问题（推荐）
@@ -73,6 +73,29 @@ pip3 install pygame
 | `R` | 重置回第一帧 |
 | `+` / `-` | 调整播放速度 (10-500 Hz) |
 | `ESC` | 退出 |
+
+### 新增：帧语义与按包显示
+
+- 默认帧语义现为 `packet`（按包回放），程序会逐包显示：包的原始字节、scantime（u8,u8 与 u16）、finger_count、key_state，以及该包内的手指坐标。要按包回放请使用：
+
+```bash
+python3 finger_trajectory_realtime.py --frame-mode packet 2.txt
+```
+
+- 仍保留 `visible` 模式（以可见轨迹点为帧），用于连续运动可视化：
+
+```bash
+python3 finger_trajectory_realtime.py --frame-mode visible 2.txt
+```
+
+### Release 行为与轨迹清理
+
+- 当检测到 `finger release`（状态=1）或 `large release`（状态=0）时，程序会清除该手指/大面积的历史轨迹，避免释放点影响后续轨迹的显示和判断。
+
+### 键盘长按支持
+
+- 对 `左右箭头` 已支持长按：按下后会先立即触发一次，短暂延迟后开始以较小间隔持续翻帧，便于快速浏览大量包数据。
+
 
 ## 界面元素
 
