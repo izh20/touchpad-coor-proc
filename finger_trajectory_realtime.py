@@ -56,7 +56,7 @@ class TrajectoryRenderer:
         0: (128, 128, 128), # UNKNOWN - 灰色
     }
 
-    def __init__(self, trajectories, xmin=None, xmax=None, ymin=None, ymax=None, packet_scantimes=None):
+    def __init__(self, trajectories, xmin=None, xmax=None, ymin=None, ymax=None, packet_scantimes=None, packet_raws=None, frame_mode='packet', total_packets=None):
         pygame.init()
 
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -66,7 +66,15 @@ class TrajectoryRenderer:
 
         self.trajectories = trajectories
         self.current_frame = 0
-        self.max_frames = max(len(pts) for pts in trajectories.values()) if trajectories else 0
+        # frame_mode: 'visible' -> frame refers to visible point index per-trajectory (existing behavior)
+        # 'packet' -> frame refers to packet index (0..total_packets-1)
+        self.frame_mode = frame_mode
+        self.packet_raws = packet_raws or {}
+        self.total_packets = total_packets or len(self.packet_raws)
+        if self.frame_mode == 'packet':
+            self.max_frames = max(1, self.total_packets)
+        else:
+            self.max_frames = max(len(pts) for pts in trajectories.values()) if trajectories else 0
 
         # 跟踪已释放的手指，在渲染时清除其轨迹
         self.visible_start_indices = {}
@@ -148,8 +156,10 @@ class TrajectoryRenderer:
 
         # 控制说明
         self.show_controls = True
-        # 每包 scantime 映射: packet_index -> scantime (u16)
+        # 每包 scantime 映射: packet_index -> (low, high, finger_cnt, key_state)
         self.packet_scantimes = packet_scantimes or {}
+        # 原始包字节: packet_index -> list[int]
+        self.packet_raws = packet_raws or {}
         # scantime 显示模式：False=基于可见点，True=基于数据起始包（便于调试）
         self.force_earliest_packet_mode = False
         
@@ -274,19 +284,20 @@ class TrajectoryRenderer:
         frame_text = self.font.render(f'Frame {self.current_frame}/{total_frames}', True, self.WHITE)
         self.screen.blit(frame_text, (10, 10))
 
-        # 选择用于显示 scantime 的 packet_index：
-        # 默认采用当前可见点中最大的 packet_index；按 `k` 切换为最早包（调试用）
+        # 选择用于显示 scantime 的 packet_index
         display_packet_index = None
-        if self.force_earliest_packet_mode:
-            # 使用数据中最早的 packet_index（若存在）
-            if self.packet_scantimes:
-                display_packet_index = min(self.packet_scantimes.keys())
+        if self.frame_mode == 'packet':
+            display_packet_index = self.current_frame
         else:
-            for fid, pts in self.trajectories.items():
-                start_idx = self.visible_start_indices.get(fid, 0)
-                end_idx = self.visible_end_indices.get(fid, 0)
-                if end_idx > start_idx and end_idx <= len(pts):
-                    display_packet_index = max(display_packet_index or 0, pts[end_idx - 1].packet_index)
+            if self.force_earliest_packet_mode:
+                if self.packet_scantimes:
+                    display_packet_index = min(self.packet_scantimes.keys())
+            else:
+                for fid, pts in self.trajectories.items():
+                    start_idx = self.visible_start_indices.get(fid, 0)
+                    end_idx = self.visible_end_indices.get(fid, 0)
+                    if end_idx > start_idx and end_idx <= len(pts):
+                        display_packet_index = max(display_packet_index or 0, pts[end_idx - 1].packet_index)
 
         # 显示对应的 scantime（若存在）——使用可见点的 packet_index 映射
         scantime_val = self.packet_scantimes.get(display_packet_index) if display_packet_index is not None else None
@@ -314,27 +325,39 @@ class TrajectoryRenderer:
         else:
             base_text = self.font.render('ScanTime: -', True, self.WHITE)
             self.screen.blit(base_text, (10, 34))
-        # 左上角下方：每个 ID 的当前坐标（基于当前帧前最后一个点）
+        # 左上角下方：每个 ID 的当前坐标（基于当前帧或包）
         coords_x = 10
-        # 将坐标列表下移，避免与 FPS/ScanTime 重叠
         coords_y = 90
-        for finger_id in sorted(self.trajectories.keys()):
-            pts = self.trajectories.get(finger_id, [])
-            # 仅显示当前可见范围内的坐标
-            start_idx = self.visible_start_indices.get(finger_id, 0)
-            end_idx = self.visible_end_indices.get(finger_id, 0)
-            if end_idx > start_idx and end_idx <= len(pts):
-                cur = pts[end_idx - 1]
-                # 仅显示数据坐标（十进制）
-                coord_line = f'F{finger_id}: X:{cur.x} Y:{cur.y}'
-            else:
-                # 若当前 ID 在本帧不可见，则跳过显示
-                continue
-
-            color = self.FINGER_COLORS[finger_id % len(self.FINGER_COLORS)]
-            text = self.font.render(coord_line, True, color)
-            self.screen.blit(text, (coords_x, coords_y))
-            coords_y += 20
+        if self.frame_mode == 'packet':
+            # 在包模式下，显示属于当前包的每个手指点
+            pkt_idx = display_packet_index
+            for finger_id in sorted(self.trajectories.keys()):
+                pts = self.trajectories.get(finger_id, [])
+                # 查找该手指在当前包内的点
+                pts_in_pkt = [p for p in pts if p.packet_index == pkt_idx]
+                if not pts_in_pkt:
+                    continue
+                # 可能有多个点（不同槽位），显示最后一个
+                cur = pts_in_pkt[-1]
+                coord_line = f'P{pkt_idx} F{finger_id}: X:{cur.x} Y:{cur.y} S:{cur.status}'
+                color = self.FINGER_COLORS[finger_id % len(self.FINGER_COLORS)]
+                text = self.font.render(coord_line, True, color)
+                self.screen.blit(text, (coords_x, coords_y))
+                coords_y += 20
+        else:
+            for finger_id in sorted(self.trajectories.keys()):
+                pts = self.trajectories.get(finger_id, [])
+                start_idx = self.visible_start_indices.get(finger_id, 0)
+                end_idx = self.visible_end_indices.get(finger_id, 0)
+                if end_idx > start_idx and end_idx <= len(pts):
+                    cur = pts[end_idx - 1]
+                    coord_line = f'F{finger_id}: X:{cur.x} Y:{cur.y}'
+                else:
+                    continue
+                color = self.FINGER_COLORS[finger_id % len(self.FINGER_COLORS)]
+                text = self.font.render(coord_line, True, color)
+                self.screen.blit(text, (coords_x, coords_y))
+                coords_y += 20
 
         # 绘制坐标轴
         pygame.draw.line(self.screen, self.GRAY, (50, SCREEN_HEIGHT - 50), (SCREEN_WIDTH - 50, SCREEN_HEIGHT - 50), 2)  # X轴
@@ -351,80 +374,133 @@ class TrajectoryRenderer:
             if not points:
                 continue
 
-            # 获取该手指在当前帧的可见范围
-            start_idx = self.visible_start_indices.get(finger_id, 0)
-            end_idx = self.visible_end_indices.get(finger_id, len(points))
-
-            # 获取可见点
-            if start_idx >= len(points) or end_idx <= start_idx:
-                continue
-
-            visible_points = points[start_idx:end_idx]
-            if not visible_points:
-                continue
-
-            if len(visible_points) < 1:
-                continue
-
+            # 在 packet 模式下，绘制历史轨迹（<= 当前包）并高亮当前包内点；visible 模式保持原有行为
             color = self.FINGER_COLORS[finger_id % len(self.FINGER_COLORS)]
+            if self.frame_mode == 'packet':
+                pkt_idx = display_packet_index
+                if pkt_idx is None:
+                    continue
+                history_points = [p for p in points if p.packet_index <= pkt_idx]
+                current_points = [p for p in points if p.packet_index == pkt_idx]
 
-            # 判断是大面积还是手指 - 根据状态判断
-            # 状态3=手指touch, 状态2=大面积touch
-            # 状态1=手指release, 状态0=大面积release
-            current_status = visible_points[-1].status
-            is_large_area = current_status in (0, 2)  # 大面积touch或release
+                # 如果没有历史也没有当前包点，则跳过
+                if not history_points and not current_points:
+                    continue
 
-            if is_large_area:
-                # 大面积：粗线 + 填充轨迹区域
-                if len(visible_points) > 1:
-                    # 绘制粗轨迹线（6px）
-                    for i in range(len(visible_points) - 1):
-                        p1 = visible_points[i]
-                        p2 = visible_points[i + 1]
+                # 当出现 release (0 or 1) 时，需要清掉该手指之前的轨迹
+                # 找到 history_points 中最近的 release，并只保留其后的点
+                last_release_idx = -1
+                for i in range(len(history_points) - 1, -1, -1):
+                    if history_points[i].status in (0, 1):
+                        last_release_idx = i
+                        break
+                if last_release_idx >= 0:
+                    history_points = history_points[last_release_idx + 1:]
+
+                # 不在当前包显示 release 点（避免将 release 点作为新的可见点）
+                current_points = [p for p in current_points if p.status not in (0, 1)]
+
+                # 绘制历史轨迹（细线或粗线基于最后历史状态）
+                last_status = history_points[-1].status if history_points else (current_points[-1].status if current_points else 3)
+                is_large_area = last_status in (0, 2)
+
+                if len(history_points) > 1:
+                    if is_large_area:
+                        width = 6
+                    else:
+                        width = 2
+                    for i in range(len(history_points) - 1):
+                        p1 = history_points[i]
+                        p2 = history_points[i + 1]
                         x1, y1 = self.coord_to_screen(p1.x, p1.y)
                         x2, y2 = self.coord_to_screen(p2.x, p2.y)
-                        pygame.draw.line(self.screen, color, (x1, y1), (x2, y2), 6)
+                        pygame.draw.line(self.screen, color, (x1, y1), (x2, y2), width)
 
-                    # 填充轨迹区域（半透明）
-                    if len(visible_points) > 2:
-                        trail_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-                        trail_points = [self.coord_to_screen(p.x, p.y) for p in visible_points]
-                        pygame.draw.lines(trail_surface, (*color, 80), False, trail_points, 6)
-                        self.screen.blit(trail_surface, (0, 0))
+                # 填充大面积轨迹区域
+                if is_large_area and len(history_points) > 2:
+                    trail_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+                    trail_points = [self.coord_to_screen(p.x, p.y) for p in history_points]
+                    pygame.draw.lines(trail_surface, (*color, 80), False, trail_points, 6)
+                    self.screen.blit(trail_surface, (0, 0))
 
-                # 大面积当前点：大实心圆
-                current = visible_points[-1]
-                x, y = self.coord_to_screen(current.x, current.y)
-                pygame.draw.circle(self.screen, color, (x, y), 15)
+                # 高亮当前包内点
+                for cur in current_points:
+                    x, y = self.coord_to_screen(cur.x, cur.y)
+                    if is_large_area:
+                        pygame.draw.circle(self.screen, color, (x, y), 15)
+                    else:
+                        status_color = self.STATUS_COLORS.get(cur.status, self.GRAY)
+                        pygame.draw.circle(self.screen, status_color, (x, y), 10)
+                        pygame.draw.circle(self.screen, color, (x, y), 6, 2)
 
-                # 大面积标签
-                label = self.font.render(f'AREA{finger_id}', True, color)
-                self.screen.blit(label, (x + 18, y - 18))
-                
+                # 标签：如果当前包有点，显示标签在最后一个当前点处
+                if current_points:
+                    last = current_points[-1]
+                    lx, ly = self.coord_to_screen(last.x, last.y)
+                    label = self.font.render(f'F{finger_id}', True, color)
+                    self.screen.blit(label, (lx + 10, ly - 10))
 
             else:
-                # 手指：细线 + 小空心点
-                if len(visible_points) > 1:
-                    for i in range(len(visible_points) - 1):
-                        p1 = visible_points[i]
-                        p2 = visible_points[i + 1]
-                        x1, y1 = self.coord_to_screen(p1.x, p1.y)
-                        x2, y2 = self.coord_to_screen(p2.x, p2.y)
-                        pygame.draw.line(self.screen, color, (x1, y1), (x2, y2), 2)
+                start_idx = self.visible_start_indices.get(finger_id, 0)
+                end_idx = self.visible_end_indices.get(finger_id, len(points))
+                if start_idx >= len(points) or end_idx <= start_idx:
+                    continue
+                visible_points = points[start_idx:end_idx]
 
-                # 手指当前点
-                current = visible_points[-1]
-                x, y = self.coord_to_screen(current.x, current.y)
-                status_color = self.STATUS_COLORS.get(current.status, self.GRAY)
-                # 小空心圆 (8px，线宽2)
-                pygame.draw.circle(self.screen, status_color, (x, y), 8, 2)
+                if not visible_points:
+                    continue
 
-                # 手指ID标签
-                label = self.font.render(f'F{finger_id}', True, color)
-                self.screen.blit(label, (x + 10, y - 10))
-                
+                # 判断是大面积还是手指 - 根据状态判断
+                current_status = visible_points[-1].status
+                is_large_area = current_status in (0, 2)  # 大面积touch或release
 
-            pass
+                if is_large_area:
+                    # 大面积：粗线 + 填充轨迹区域
+                    if len(visible_points) > 1:
+                        # 绘制粗轨迹线（6px）
+                        for i in range(len(visible_points) - 1):
+                            p1 = visible_points[i]
+                            p2 = visible_points[i + 1]
+                            x1, y1 = self.coord_to_screen(p1.x, p1.y)
+                            x2, y2 = self.coord_to_screen(p2.x, p2.y)
+                            pygame.draw.line(self.screen, color, (x1, y1), (x2, y2), 6)
+
+                        # 填充轨迹区域（半透明）
+                        if len(visible_points) > 2:
+                            trail_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+                            trail_points = [self.coord_to_screen(p.x, p.y) for p in visible_points]
+                            pygame.draw.lines(trail_surface, (*color, 80), False, trail_points, 6)
+                            self.screen.blit(trail_surface, (0, 0))
+
+                    # 大面积当前点：大实心圆
+                    current = visible_points[-1]
+                    x, y = self.coord_to_screen(current.x, current.y)
+                    pygame.draw.circle(self.screen, color, (x, y), 15)
+
+                    # 大面积标签
+                    label = self.font.render(f'AREA{finger_id}', True, color)
+                    self.screen.blit(label, (x + 18, y - 18))
+
+                else:
+                    # 手指：细线 + 小空心点
+                    if len(visible_points) > 1:
+                        for i in range(len(visible_points) - 1):
+                            p1 = visible_points[i]
+                            p2 = visible_points[i + 1]
+                            x1, y1 = self.coord_to_screen(p1.x, p1.y)
+                            x2, y2 = self.coord_to_screen(p2.x, p2.y)
+                            pygame.draw.line(self.screen, color, (x1, y1), (x2, y2), 2)
+
+                    # 手指当前点
+                    current = visible_points[-1]
+                    x, y = self.coord_to_screen(current.x, current.y)
+                    status_color = self.STATUS_COLORS.get(current.status, self.GRAY)
+                    # 小空心圆 (8px，线宽2)
+                    pygame.draw.circle(self.screen, status_color, (x, y), 8, 2)
+
+                    # 手指ID标签
+                    label = self.font.render(f'F{finger_id}', True, color)
+                    self.screen.blit(label, (x + 10, y - 10))
 
         # 右上角：轨迹图例，避免遮挡主体区域
         legend_x = SCREEN_WIDTH - 300
@@ -477,6 +553,20 @@ class TrajectoryRenderer:
         fps_text = self.font.render(f'FPS: {self.fps}', True, self.WHITE)
         self.screen.blit(fps_text, (10, 58))
 
+        # 在包模式下，显示原始包字节（hex）在左侧中部位置
+        if self.frame_mode == 'packet' and display_packet_index is not None:
+            pkt_bytes = self.packet_raws.get(display_packet_index)
+            if pkt_bytes:
+                hex_strs = ' '.join(f'{b:02X}' for b in pkt_bytes)
+                # 可能很长，按 60 字符分行
+                lines = [hex_strs[i:i+60] for i in range(0, len(hex_strs), 60)]
+                y0 = coords_y + 10
+                self.screen.blit(self.title_font.render(f'Packet {display_packet_index} Raw:', True, self.WHITE), (10, y0))
+                y0 += 30
+                for ln in lines:
+                    self.screen.blit(self.font.render(ln, True, self.GRAY), (10, y0))
+                    y0 += 20
+
         pygame.display.flip()
 
     def run(self):
@@ -501,12 +591,13 @@ def main():
     parser.add_argument('--xmax', type=float, help='Optional: set maximum X value for axis')
     parser.add_argument('--ymin', type=float, help='Optional: set minimum Y value for axis')
     parser.add_argument('--ymax', type=float, help='Optional: set maximum Y value for axis')
+    parser.add_argument('--frame-mode', choices=['visible', 'packet'], default='packet', help='Frame semantics: visible=point-based, packet=packet-based (default)')
     args = parser.parse_args()
 
     print(f"Parsing file: {args.input_file}")
 
     parser_obj = FingerDataParser()
-    trajectories, total_packets, packet_scantimes = parser_obj.process_csv_data(args.input_file)
+    trajectories, total_packets, packet_scantimes, packet_raws = parser_obj.process_csv_data(args.input_file)
 
     print(f"Total packets: {total_packets}")
     print(f"Trajectories found:")
@@ -526,7 +617,17 @@ def main():
     print("  ESC: Quit")
 
     # 传递可选的自定义边界到渲染器
-    renderer = TrajectoryRenderer(trajectories, xmin=args.xmin, xmax=args.xmax, ymin=args.ymin, ymax=args.ymax, packet_scantimes=packet_scantimes)
+    renderer = TrajectoryRenderer(
+        trajectories,
+        xmin=args.xmin,
+        xmax=args.xmax,
+        ymin=args.ymin,
+        ymax=args.ymax,
+        packet_scantimes=packet_scantimes,
+        packet_raws=packet_raws,
+        frame_mode=args.frame_mode,
+        total_packets=total_packets
+    )
     renderer.run()
 
 

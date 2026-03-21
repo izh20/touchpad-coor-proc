@@ -40,6 +40,7 @@ class FingerDataParser:
         packet_scantimes = {}
         i = 0
 
+        packet_raws = {}
         while i < len(lines):
             if lines[i] == FINGER_REPORT_ID:
                 pkt = lines[i:i + PACKET_SIZE]
@@ -51,26 +52,31 @@ class FingerDataParser:
                         high_idx = 44
                         cnt_idx = 45
                         key_idx = 46
-                        if 0 <= low_idx < len(pkt) and 0 <= high_idx < len(pkt):
+                        if low_idx < len(pkt) and high_idx < len(pkt):
                             low = pkt[low_idx]
                             high = pkt[high_idx]
-                            finger_cnt = pkt[cnt_idx] if 0 <= cnt_idx < len(pkt) else None
-                            key_state = pkt[key_idx] if 0 <= key_idx < len(pkt) else None
+                            finger_cnt = pkt[cnt_idx] if cnt_idx < len(pkt) else None
+                            key_state = pkt[key_idx] if key_idx < len(pkt) else None
                             packet_scantimes[packet_index] = (low, high, finger_cnt, key_state)
                         else:
                             packet_scantimes[packet_index] = None
                     except Exception:
                         packet_scantimes[packet_index] = None
 
+                    # 保存原始包用于按包显示
+                    packet_raws[packet_index] = list(pkt)
                     fingers = self.parse_packet(pkt, packet_index)
                     for finger in fingers:
                         trajectories[finger.finger_id].append(finger)
                     packet_index += 1
-                i += PACKET_SIZE
+                    i += PACKET_SIZE
+                else:
+                    # 未能读取到完整包，前进 1 字节继续同步查找
+                    i += 1
             else:
                 i += 1
 
-        return trajectories, packet_index, packet_scantimes
+        return trajectories, packet_index, packet_scantimes, packet_raws
 
     def parse_packet(self, data_bytes, packet_index):
         fingers = []
